@@ -1,21 +1,7 @@
 import { ShoptetApiClient, ShoptetCustomer, ShoptetOrder, GlobalStats } from './client';
 import Decimal from 'decimal.js';
-
-// Simulovaný existující algoritmus, který se "nesmí změnit" (zkopírováno z cli/customers-xlsx.ts)
-type CustomerTier = "ZR4" | "ZR6" | "ZR8" | "ZR10" | "ZR12" | "ZR14" | "ZR16" | "ZR18" | "ZR20" | "ZR25";
-
-function determineTier(totalOrderValue: number): CustomerTier | undefined {
-    if (totalOrderValue >= 10000) return "ZR25";
-    if (totalOrderValue >= 7000) return "ZR20";
-    if (totalOrderValue >= 5000) return "ZR18";
-    if (totalOrderValue >= 2000) return "ZR16";
-    if (totalOrderValue >= 1000) return "ZR14";
-    if (totalOrderValue >= 700) return "ZR12";
-    if (totalOrderValue >= 500) return "ZR10";
-    if (totalOrderValue >= 300) return "ZR8";
-    if (totalOrderValue >= 100) return "ZR6";
-    return "ZR4"; // 0 - 99.99
-}
+import { determineTier } from '../../../src/core/customer-tier.js';
+import { CustomerTier } from '../../../src/core/interfaces.js';
 
 export interface CustomerDiff {
     customerGuid: string;
