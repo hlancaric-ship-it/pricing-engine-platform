@@ -1,5 +1,6 @@
 import Decimal from "decimal.js";
 import { CouponPolicy } from "../../../src/coupon/CouponPolicy.js";
+import { ALL_CUSTOMER_TIERS } from "../../../src/core/customer-tier.js";
 import { TIER_PRICELIST_MAP, GUEST_PRICELIST_ID } from "./tier-pricelist-map.js";
 import {
     COUPON_STANDARD_LIMIT,
@@ -164,8 +165,15 @@ export function computeCouponWrites(
     // Same "absent = allowed" convention as engine/pricing.ts's resolveAllowLoyaltyDiscount().
     const loyaltyDiscountAllowed = product.allowLoyaltyDiscount !== false;
 
-    for (const [tier, pricelistId] of Object.entries(TIER_PRICELIST_MAP)) {
+    // Core computation iterates over the generic, platform-independent tier
+    // identifiers (ALL_CUSTOMER_TIERS) — not over TIER_PRICELIST_MAP's keys. The
+    // Shoptet pricelist ID is resolved here only to populate the output item
+    // (existing callers of computeCouponWrites already depend on item.pricelistId
+    // being present), i.e. at the adapter boundary of this function, not as the
+    // loop's driving data source.
+    for (const tier of ALL_CUSTOMER_TIERS) {
         const rawTierDiscount = loyaltyDiscountAllowed ? (loyaltyTiers[tier] ?? new Decimal(0)) : new Decimal(0);
+        const pricelistId = TIER_PRICELIST_MAP[tier];
         items.push(computeItem(policy, product, effectiveLimit, productDiscount, tier, pricelistId, rawTierDiscount, tier, couponDisabled));
     }
 

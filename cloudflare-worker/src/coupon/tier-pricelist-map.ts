@@ -1,7 +1,14 @@
+import { ALL_CUSTOMER_TIERS } from "../../../src/core/customer-tier.js";
+
 /**
  * Loyalty tier -> Shoptet pricelist ID. Sourced from the same mapping already used
  * elsewhere in the project (src/cli/benchmark.ts), duplicated here (not imported)
  * because cloudflare-worker has its own build/deploy boundary from the root package.
+ *
+ * This is the Shoptet-adapter-side half of the tier/pricelist split: the generic ZR
+ * tier identifiers themselves (platform-independent) live in
+ * src/core/customer-tier.ts (ALL_CUSTOMER_TIERS); only their mapping onto a
+ * concrete Shoptet pricelist ID belongs here, at the adapter boundary.
  */
 export const TIER_PRICELIST_MAP: Record<string, number> = {
     ZR4: 2,
