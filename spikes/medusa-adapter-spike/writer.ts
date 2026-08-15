@@ -79,6 +79,11 @@ export async function writeOverridePrice(
         title: `okfish-pricing-engine spike override — ${tier}`,
         description: `Spike-written override price list for tier ${tier} (medusa-adapter-spike)`,
         type: "override",
+        // status defaults to "draft" on Medusa's Admin API if omitted, and a
+        // draft PriceList is filtered out of calculatePrices' SQL entirely
+        // (pl.status = ACTIVE) -- verified live against a real Medusa
+        // instance in MEDUSA-SPIKE-RESULTS.md section 3/6. Must be explicit.
+        status: "active",
         prices: [
             {
                 variant_id: variantId,
