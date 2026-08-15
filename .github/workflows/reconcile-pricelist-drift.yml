@@ -7,11 +7,8 @@ name: Price Integrity Reconciliation (Stage 5)
 # cenou, aniž by jediný sync.yml běh kdy selhal.
 
 on:
-  schedule:
-    # Jednou denně, mimo špičku syncu (ten běží každých 15 min). Hodnota
-    # mismatche potřebuje přetrvat 2 po sobě jdoucí běhy, než zaalertuje
-    # (viz reconcile-pricelist-drift.ts), takže denní frekvence -- ne 15min.
-    - cron: '0 3 * * *'
+  # DISABLED 2026-08-15 in pricing-engine-platform (research fork, not
+  # production) — see sync.yml for why. Manual dispatch only.
   workflow_dispatch: # Možnost manuálního spuštění přes UI
 
 concurrency:

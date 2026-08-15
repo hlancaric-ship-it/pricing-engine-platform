@@ -11,12 +11,8 @@ name: Coupon Integrity Reconciliation (Stage 5)
 # stopy náhrady.
 
 on:
-  schedule:
-    # Mimo špičku, staggered vůči price reconciliation (03:00) a hlavnímu
-    # syncu (každých 15 min) -- hodnota mismatche potřebuje přetrvat 2 po
-    # sobě jdoucí běhy, než zaalertuje (viz reconcile-coupon-drift.ts), takže
-    # denní frekvence stačí.
-    - cron: '30 3 * * *'
+  # DISABLED 2026-08-15 in pricing-engine-platform (research fork, not
+  # production) — see sync.yml for why. Manual dispatch only.
   workflow_dispatch: # Možnost manuálního spuštění přes UI
 
 concurrency:

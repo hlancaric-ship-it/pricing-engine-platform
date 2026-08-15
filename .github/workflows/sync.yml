@@ -1,18 +1,15 @@
 name: Shoptet Pricing Engine Sync
 
 on:
-  schedule:
-    # Zrychleno 2026-08-05 (na žádost klienta) z hodinové na 15minutovou
-    # frekvenci — nové/upravené produkty a přepočet tierů se tak propíšou
-    # mnohem rychleji. Incrementální běh trvá řádově pod minutu (ověřeno),
-    # takže se do 15minutového okna bezpečně vejde.
-    - cron: '*/15 * * * *'
+  # DISABLED 2026-08-15 in pricing-engine-platform: this repo is a research
+  # fork (platform-independence experiments), not a production deployment.
+  # schedule/repository_dispatch triggers were copied verbatim from
+  # okfish-pricing-engine's baseline and were firing on a cron with no
+  # MASTER_FEED_URL/Shoptet secrets configured here — failing every 15 min
+  # for hours, pure noise, and a latent risk if secrets were ever added to
+  # this repo by mistake (this code would then write to real Shoptet data).
+  # Manual dispatch only, kept as reference code.
   workflow_dispatch: # Možnost manuálního spuštění přes UI
-  repository_dispatch:
-    # Spouští Worker (POST /v1/webhook/shoptet) během pár sekund po order:create/
-    # order:update v Shoptetu -- cron výše zůstává jako záložní síť pro případ, že by
-    # webhook selhal nebo Shoptet vyčerpal svých 3 retry pokusy.
-    types: [shoptet-webhook]
 
 # Ochrana proti souběžnému běhu (pokud už synchronizace běží, nová počká nebo se nespustí paralelně)
 concurrency:

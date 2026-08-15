@@ -1,11 +1,8 @@
 name: Set stockout behavior by price
 
 on:
-  schedule:
-    # Denně v 5:00 UTC — nové produkty s "Nedostupné" se srovnají podle ceny
-    # (>=100 € -> "Na dotaz", <100 € -> zůstává "Nedostupné") bez nutnosti
-    # ručního zásahu. Zapnuto 2026-08-05 na žádost klienta.
-    - cron: '0 5 * * *'
+  # DISABLED 2026-08-15 in pricing-engine-platform (research fork, not
+  # production) — see sync.yml for why. Manual dispatch only.
   workflow_dispatch:
     inputs:
       live:
