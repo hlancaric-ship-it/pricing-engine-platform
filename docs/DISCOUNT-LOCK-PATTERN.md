@@ -246,3 +246,44 @@ naživo**, ne jen napsaný a otestovaný proti mockům:
 - Testovací skripty: `spikes/shopify-adapter-spike/live-test-discount-lock.ts`
   (write+verify), `spikes/shopify-adapter-spike/setup-discount-e2e.ts`
   (OAuth code → token → najít Function → vytvořit discount).
+
+## Související oprava ze stejné session (2026-08-15): cap vs. sale price porovnání
+
+Mimo samotný discount-lock pattern vznikla ve stejné session ještě jedna
+core oprava, zapsaná zde pro úplnost (viz git log pro detail, tenhle soubor
+je o discount-locku, ne o týhle věci primárně):
+
+**Problém:** `DiscountLimitPolicy.ts` (a `cloudflare-worker/src/engine/pricing.ts`)
+při aktivním capu vracely sale/akční cenu bezpodmínečně, bez porovnání s tím,
+co by capem ořezaná loyalty cena dala zákazníkovi. Výsledek: zákazník na
+vysokém tieru mohl zůstat na mělčí akční ceně, i když měl podle stropu nárok
+na hlubší slevu.
+
+**Oprava:** cap ořeže loyalty cenu (nikdy ji nezvedne, jen omezí hloubku),
+sale cena se pak porovná s touhle ořezanou cenou — vyhrává nižší z obou.
+
+**Ověřeno:**
+- Reálný VAGNER regresní test (`tests/pricing-parity.test.ts`,
+  `action-price-steeper-than-cap` profil) — pořád prochází, hluboká akční
+  cena se nezvedá.
+- Reálný produkt 39769 z `products.csv` (`tests/integration-e2e.test.ts`) —
+  přepočítán na správné hodnoty per tier.
+- 5 nových testů (`tests/brand-category-clearance-combo.test.ts`) přesně
+  podle scénářů, co Jan potvrdil na konkrétních číslech (cap jako ceiling
+  ne floor, výprodej "slepý" napříč tiery, mělčí akce prohrává s hlubším
+  tierem).
+- **Živě na produkci okfish**: CSV import pro DELPHIN/DELPHIN BOMB/MIVARDI/
+  MIKADO (5613 produktů, `src/cli/generate-brands-subset.ts` v okfish repu,
+  read-only vytvořeno, spuštěno Janem) opravil "CHYBÍ ZÁZNAM" problém
+  (Shoptet PATCH neumí založit nikdy-nezapsaný pricelist item, jen update —
+  potvrzeno proti Shoptet OpenAPI spec). Full sync (`scripts/run-real-sync.ts`)
+  proběhl SUCCESS na celém katalogu (16 716 produktů) po opravě.
+- **Core logika samotná (DiscountLimitPolicy.ts) v okfish zatím NEOPRAVENA**
+  — jen v pricing-engine-platform, na Janovo explicitní přání ("nejdřív u
+  sebe, pak až v okfish"). Port do okfish je otevřený bod na příště.
+
+Nová testovací vrstva k tomu: `src/adapters/write-locked-prices-batch.ts`
+(Stage 4 fail-closed batch writer) a `src/adapters/reconcile-prices.ts`
+(Stage 5 reconciliation se self-checkem), koncepčně portované z
+okfish-pricing-engine incident logu (INC-006, INC-010, INC-011) — read-only
+audit, žádný okfish kód nebyl zkopírován ani upraven.
