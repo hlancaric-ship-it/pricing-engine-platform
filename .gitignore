@@ -1,5 +1,6 @@
 node_modules/
 dist/
+extensions/*/.javy/
 exports/
 .env
 .DS_Store

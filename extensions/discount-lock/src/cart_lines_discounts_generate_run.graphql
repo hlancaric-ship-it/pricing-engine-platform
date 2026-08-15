@@ -1,0 +1,27 @@
+query CartInput {
+  cart {
+    lines {
+      id
+      cost {
+        subtotalAmount {
+          amount
+        }
+      }
+      merchandise {
+        __typename
+        ... on ProductVariant {
+          id
+          lockedMetafield: metafield(namespace: "pricing_engine", key: "locked") {
+            value
+          }
+        }
+      }
+    }
+  }
+  discount {
+    discountClasses
+    metafield(namespace: "pricing_engine", key: "discount_config") {
+      value
+    }
+  }
+}

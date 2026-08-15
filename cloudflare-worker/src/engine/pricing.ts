@@ -20,7 +20,7 @@
  *  3. Rounding:        round to 2 decimal places
  */
 
-import { LOYALTY_TIERS, TIER_NAMES, BRAND_LIMITS, CATEGORY_LIMITS, PRODUCT_LIMITS } from './config';
+import { LOYALTY_TIERS, TIER_NAMES, BRAND_LIMITS, CATEGORY_LIMITS, PRODUCT_LIMITS, BRAND_SALE_DISCOUNTS } from './config';
 
 export interface CsvRow {
     [key: string]: string;
@@ -123,6 +123,21 @@ export function calculateAllTierPrices(row: CsvRow, productLimits: Record<string
     // (actionPrice == price == 1167.20, blocking all loyalty/cap pricing).
     // Treat it as "no action" so it can't override the cap-floor rule below.
     if (actionPrice !== undefined && actionPrice >= basePrice) actionPrice = undefined;
+
+    // Celoroční brandová akční cena (policy-v1.json's brandSaleDiscounts, viz
+    // config.ts) -- syntetizuje actionPrice JEN když produkt ještě žádnou
+    // vlastní (feed/Shoptet) akční cenu nemá. Existující individuální sale
+    // vždy vyhrává beze změny, stejná "výprodej-ochrana" konvence jako jinde
+    // v pipeline. Od tohoto bodu dál se actionPrice chová naprosto stejně
+    // jako jakákoli jiná -- žádná další logika níže se kvůli tomuto nemění.
+    if (actionPrice === undefined) {
+        const manufacturer = row['manufacturer'];
+        const saleDiscount = manufacturer ? BRAND_SALE_DISCOUNTS[manufacturer] : undefined;
+        if (saleDiscount !== undefined) {
+            actionPrice = applyPercent(basePrice, saleDiscount * 100);
+        }
+    }
+
     const allowLoyaltyDiscount = resolveAllowLoyaltyDiscount(row);
     const activeLimit = resolveActiveLimit(row, productLimits);
     const minAllowedPrice = activeLimit !== undefined ? applyPercent(basePrice, activeLimit * 100) : 0;
@@ -140,14 +155,7 @@ export function calculateAllTierPrices(row: CsvRow, productLimits: Record<string
         let bestPrice: number = basePrice;
         let usedAction = false;
 
-        if (minAllowedPrice > 0 && actionPrice !== undefined) {
-            // A cap is active AND the product has its own sale/action price — that
-            // sale price is authoritative: neither raised by the cap-floor below,
-            // nor overridden by a steeper loyalty-tier discount. Explicit client
-            // requirement — see INCIDENTS.md ("2026-08-04 VAGNER" entry).
-            bestPrice = actionPrice;
-            usedAction = true;
-        } else if (actionPrice !== undefined && loyaltyPrice !== undefined) {
+        if (actionPrice !== undefined && loyaltyPrice !== undefined) {
             if (actionPrice < loyaltyPrice) { bestPrice = actionPrice; usedAction = true; }
             else { bestPrice = loyaltyPrice; }
         } else if (actionPrice !== undefined) {
@@ -157,10 +165,20 @@ export function calculateAllTierPrices(row: CsvRow, productLimits: Record<string
             bestPrice = loyaltyPrice;
         }
 
-        // Enforce the discount limit floor — but NEVER against an active action/sale
-        // price (handled above already; this only fires for loyalty-only prices).
-        if (!usedAction && minAllowedPrice > 0 && bestPrice < minAllowedPrice) {
-            bestPrice = minAllowedPrice;
+        // Cap-clamp whatever bestPrice currently is (action or loyalty) up to what
+        // the cap allows, if it went deeper than the cap permits — never raises a
+        // price that was already shallower than the cap. An active action/sale
+        // price is then compared against that capped value again and wins outright
+        // if it's still deeper, so it's never watered down to the cap floor
+        // (VAGNER incident, INCIDENTS.md 2026-08-04: an 18%-off action price must
+        // never be raised to a 4%-cap floor). This also correctly lets a genuinely
+        // shallow action price lose to a deeper cap-limited loyalty price instead
+        // of always winning by default — matches src/policies/DiscountLimitPolicy.ts.
+        if (minAllowedPrice > 0) {
+            const cappedPrice = bestPrice < minAllowedPrice ? minAllowedPrice : bestPrice;
+            const actionWins = actionPrice !== undefined && actionPrice < cappedPrice;
+            bestPrice = actionWins ? (actionPrice as number) : cappedPrice;
+            usedAction = actionWins;
         }
 
         result[tier] = { price: round2(bestPrice), usedActionPrice: usedAction };

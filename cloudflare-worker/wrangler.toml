@@ -1,33 +1,36 @@
-name = "shoptet-vip-worker"
+name = "pricing-engine-platform-worker"
 main = "src/index.ts"
 compatibility_date = "2024-07-20"
 
 kv_namespaces = [
-  { binding = "VIP_KV", id = "ce9bb43859b4401e9234045e7743296b" }
+  { binding = "VIP_KV", id = "REPLACE_WITH_YOUR_OWN_KV_NAMESPACE_ID" }
 ]
 
 r2_buckets = [
-  { binding = "FEED_BUCKET", bucket_name = "shoptet-feed-bucket" }
+  { binding = "FEED_BUCKET", bucket_name = "pricing-engine-platform-feed-bucket" }
 ]
 
 [vars]
-MASTER_FEED_URL = "https://www.okfish.sk/export/products.csv?patternId=32&partnerId=4&hash=24ab65131e522fdbf2511f897e7775ef4d412dd18557d1382160d3a826eb4d61"
+# Deliberately NOT okfish.sk's live feed URL/hash — this is a placeholder-value
+# config file for this platform-independent repo, not a live deployment target.
+# Set your own feed URL (or a test fixture) before ever running `wrangler deploy`.
+MASTER_FEED_URL = "https://example.com/replace-with-your-own-feed-url.csv"
 
 [triggers]
 crons = ["12 6,10,14,18,22 * * *"]
 
 [env.staging]
-name = "shoptet-vip-worker-staging"
+name = "pricing-engine-platform-worker-staging"
 [env.staging.triggers]
 crons = []
 
 [env.staging.vars]
-MASTER_FEED_URL = "https://www.okfish.sk/export/products.csv?patternId=32&partnerId=4&hash=24ab65131e522fdbf2511f897e7775ef4d412dd18557d1382160d3a826eb4d61"
+MASTER_FEED_URL = "https://example.com/replace-with-your-own-feed-url.csv"
 
 [[env.staging.kv_namespaces]]
 binding = "VIP_KV"
-id = "82c56cb24323479da290d6d88822515b"
+id = "REPLACE_WITH_YOUR_OWN_STAGING_KV_NAMESPACE_ID"
 
 [[env.staging.r2_buckets]]
 binding = "FEED_BUCKET"
-bucket_name = "shoptet-feed-bucket-staging"
+bucket_name = "pricing-engine-platform-feed-bucket-staging"

@@ -1,0 +1,16 @@
+client_id = "750ef67721f14bb578327045e4b6f358"
+name = "price-engine-8"
+application_url = "https://example.com"
+embedded = false
+
+[auth]
+redirect_urls = ["https://example.com/api/auth"]
+
+[access_scopes]
+scopes = "write_products,read_products,read_companies,write_companies,write_discounts"
+
+[webhooks]
+api_version = "2026-07"
+
+[build]
+automatically_update_urls_on_dev = true

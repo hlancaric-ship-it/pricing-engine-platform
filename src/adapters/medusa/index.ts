@@ -14,10 +14,14 @@
  *     needs check-then-update via batchPrices, not blind create — see
  *     upsertPriceListId() below.
  *
- * Discount collision: NOT locked — a generic promotion stacks on top of the
- * override price (confirmed live, 800 -> 720 with a 10% promo). See
- * docs/DISCOUNT-LOCK-PATTERN.md for the required customer-group-scoped
- * promotion rule discipline.
+ * Discount collision: locked by scoping every promotion this adapter
+ * creates away from customer groups that currently hold an active override
+ * PriceList (createLockedPromotion), plus an audit method
+ * (auditPromotionCollisions) to catch promotions created outside this
+ * adapter that were never scoped this way. Confirmed live that an
+ * unscoped promotion stacks on top of the override price (800 -> 720 with
+ * a 10% promo, MEDUSA-SPIKE-RESULTS.md test 5) — see
+ * docs/DISCOUNT-LOCK-PATTERN.md.
  */
 import Decimal from "decimal.js";
 import { determineTier } from "../../core/customer-tier.js";
@@ -30,7 +34,22 @@ import {
     WriteOutcome,
 } from "../types.js";
 
-/** Matches @medusajs/js-sdk 2.19.0 admin.priceList surface, verified against real installed types. */
+/** A Medusa Promotion's `rules` shape — same attribute-matching contract as PriceRule (MEDUSA-DISCOVERY.md §5/§7). */
+export interface MedusaPromotionRule {
+    attribute: string;
+    operator: "eq" | "ne" | "in" | "gte" | "lte" | "gt" | "lt";
+    values: string[];
+}
+
+export interface MedusaPromotion {
+    id: string;
+    code?: string;
+    status: string;
+    application_method?: { type: string; value: number; target_type: string };
+    rules?: MedusaPromotionRule[];
+}
+
+/** Matches @medusajs/js-sdk 2.19.0 admin.priceList/promotion surface, verified against real installed types. */
 export interface MedusaAdminClient {
     admin: {
         priceList: {
@@ -41,12 +60,47 @@ export interface MedusaAdminClient {
                 payload: { create?: unknown[]; update?: unknown[] }
             ): Promise<{ created?: Array<{ id: string }>; updated?: Array<{ id: string }> }>;
         };
+        promotion: {
+            list(query: Record<string, unknown>): Promise<{ promotions: MedusaPromotion[] }>;
+            create(payload: Record<string, unknown>): Promise<{ promotion: MedusaPromotion }>;
+        };
+        product: {
+            list(query: Record<string, unknown>): Promise<{
+                products: Array<{ variants: Array<{ id: string; sku: string | null }> }>;
+            }>;
+        };
     };
+}
+
+/** Discount shape for a promotion created through createLockedPromotion — no pricing math, just what to hand Medusa. */
+export interface LockedPromotionInput {
+    code: string;
+    type: "percentage" | "fixed";
+    value: number;
+    targetType: "order" | "items" | "shipping_methods";
 }
 
 export interface MedusaAdapterConfig {
     sdk: MedusaAdminClient;
     customerGroupIdByTier: Record<CustomerTier, string>;
+    /**
+     * Store API context needed for verifyPrice() to build a real ephemeral
+     * cart and read back the resolved unit_price — the only mechanism
+     * confirmed live to reflect what a customer actually pays
+     * (MEDUSA-SPIKE-RESULTS.md section 4: cart pricing context derives
+     * customer.groups.id automatically from the cart's attached customer,
+     * no manual context injection needed). Optional so existing configs
+     * that only write prices keep working; verifyPrice reports
+     * "unavailable" when this or a tier's representative customer id is
+     * missing, rather than throwing.
+     */
+    storeApi?: {
+        storeUrl: string; // "https://xxx.medusajs.app" — no trailing slash
+        publishableApiKey: string;
+        regionId: string;
+        /** A real customer id known to belong to each tier's CustomerGroup, used only to attach to the verification cart. */
+        verificationCustomerIdByTier?: Partial<Record<CustomerTier, string>>;
+    };
 }
 
 export class MedusaAdapter implements EcommercePlatformAdapter {
@@ -128,20 +182,180 @@ export class MedusaAdapter implements EcommercePlatformAdapter {
         };
     }
 
-    async verifyPrice(sku: string, expected: Decimal, _tier: CustomerTier): Promise<VerifyOutcome> {
-        // Real verification needs a live calculatePrices call with the customer's
-        // group context, or a real cart query — both proven live in
-        // MEDUSA-SPIKE-RESULTS.md section 4. Not wired here because it needs a
-        // cart/customer context this method's signature doesn't carry — same
-        // deliberate boundary as ShopifyAdapter.verifyPrice, see
-        // docs/DISCOUNT-LOCK-PATTERN.md.
-        return {
-            sku,
-            matchesExpected: false,
-            method: "unavailable",
-            note:
-                "MedusaAdapter.verifyPrice needs a cart/customer context to call calculatePrices — " +
-                "wire this through the caller per MEDUSA-SPIKE-RESULTS.md section 4 before treating as implemented.",
+    /** Customer-group ids for every tier that currently has an active override PriceList — i.e. tiers a promotion must never touch. */
+    private async getLockedTierGroupIds(): Promise<string[]> {
+        const tiers = Object.keys(this.config.customerGroupIdByTier) as CustomerTier[];
+        const checks = await Promise.all(
+            tiers.map(async (tier) => ({ tier, existingId: await this.findExistingPriceListId(tier) }))
+        );
+        return checks.filter((c) => c.existingId).map((c) => this.config.customerGroupIdByTier[c.tier]);
+    }
+
+    /**
+     * Creates a promotion with a `customer.groups.id` `ne` rule automatically
+     * appended, excluding every customer group that has an active override
+     * PriceList. This is the enforcement side of the discount-lock pattern
+     * for Medusa: a promotion created through this method structurally
+     * cannot collide with an engine-locked tier, unlike a promotion created
+     * directly via the SDK/admin UI with no rule scoping at all (the
+     * default that produced the 800 -> 720 stacking in
+     * MEDUSA-SPIKE-RESULTS.md test 5).
+     */
+    async createLockedPromotion(input: LockedPromotionInput): Promise<{ promotionId: string; excludedGroupIds: string[] }> {
+        const excludedGroupIds = await this.getLockedTierGroupIds();
+        const rules: MedusaPromotionRule[] =
+            excludedGroupIds.length > 0
+                ? [{ attribute: "customer.groups.id", operator: "ne", values: excludedGroupIds }]
+                : [];
+
+        const res = await this.config.sdk.admin.promotion.create({
+            code: input.code,
+            status: "active",
+            type: "standard",
+            application_method: {
+                type: input.type,
+                value: input.value,
+                target_type: input.targetType,
+                allocation: "across",
+            },
+            rules,
+        });
+        return { promotionId: res.promotion.id, excludedGroupIds };
+    }
+
+    /**
+     * Lists every active promotion and flags ones that could apply to a
+     * currently-locked tier without excluding it — catches promotions
+     * created outside createLockedPromotion (admin UI, direct SDK call,
+     * a promotion that predates a tier's PriceList going active). This is
+     * the audit half of the pattern: enforcement at write time
+     * (createLockedPromotion) plus detection for everything that bypassed it.
+     */
+    async auditPromotionCollisions(): Promise<
+        Array<{ promotionId: string; code?: string; collidesWithGroupIds: string[] }>
+    > {
+        const lockedGroupIds = await this.getLockedTierGroupIds();
+        if (lockedGroupIds.length === 0) return [];
+
+        const res = await this.config.sdk.admin.promotion.list({ status: ["active"] });
+        const collisions: Array<{ promotionId: string; code?: string; collidesWithGroupIds: string[] }> = [];
+
+        for (const promotion of res.promotions) {
+            const excludedGroupIds = new Set(
+                (promotion.rules ?? [])
+                    .filter((r) => r.attribute === "customer.groups.id" && r.operator === "ne")
+                    .flatMap((r) => r.values)
+            );
+            const included = (promotion.rules ?? []).some(
+                (r) => r.attribute === "customer.groups.id" && (r.operator === "eq" || r.operator === "in")
+            );
+            // Scoped-in to specific groups (eq/in) is fine only if none of those groups are locked;
+            // no customer.groups.id rule at all means it applies globally, including locked tiers.
+            const collidesWithGroupIds = lockedGroupIds.filter((id) => !excludedGroupIds.has(id));
+            const appliesGlobally = !included && (promotion.rules ?? []).every((r) => r.attribute !== "customer.groups.id");
+            if (appliesGlobally && collidesWithGroupIds.length > 0) {
+                collisions.push({ promotionId: promotion.id, code: promotion.code, collidesWithGroupIds });
+            }
+        }
+        return collisions;
+    }
+
+    /**
+     * Stage-5 reconciliation per docs/DISCOUNT-LOCK-PATTERN.md and the okfish
+     * incident log (INC-010: a wrong response-field assumption silently
+     * broke pricing writes for 12 days while every sync run reported
+     * success). "The batchPrices call returned 2xx" is not the same claim
+     * as "a customer in this tier's cart sees this price" — only building
+     * a real cart and reading back its resolved unit_price proves the
+     * second one, per MEDUSA-SPIKE-RESULTS.md section 4 (customer.groups.id
+     * pricing context is derived automatically from the cart's attached
+     * customer, no manual context injection required).
+     */
+    async verifyPrice(sku: string, expected: Decimal, tier: CustomerTier): Promise<VerifyOutcome> {
+        const storeApi = this.config.storeApi;
+        const customerId = storeApi?.verificationCustomerIdByTier?.[tier];
+        if (!storeApi || !customerId) {
+            return {
+                sku,
+                matchesExpected: false,
+                method: "unavailable",
+                note: `No storeApi.verificationCustomerIdByTier entry configured for tier ${tier} — cannot build a verification cart.`,
+            };
+        }
+
+        const productsRes = await this.config.sdk.admin.product.list({ sku: [sku] });
+        const variantId = productsRes.products[0]?.variants.find((v) => v.sku === sku)?.id;
+        if (!variantId) {
+            return { sku, matchesExpected: false, method: "cart", note: `No variant found for sku ${sku}.` };
+        }
+
+        const headers = {
+            "Content-Type": "application/json",
+            "x-publishable-api-key": storeApi.publishableApiKey,
         };
+        /**
+         * Fails loud on HTTP-level errors instead of letting a 4xx/5xx body
+         * that still happens to parse as JSON be read as if it were a
+         * successful response — the same class of silent-success bug as
+         * okfish-pricing-engine's INC-010 (a response-shape assumption that
+         * was wrong for every call, but nothing checked status, so nothing
+         * ever noticed).
+         */
+        const storeFetch = async (path: string, init: { method: string; body?: string; headers?: Record<string, string> }) => {
+            const res = await fetch(`${storeApi.storeUrl}${path}`, { ...init, headers: { ...headers, ...init.headers } });
+            const json = await res.json().catch(() => undefined);
+            if (!res.ok) {
+                throw new Error(`Medusa Store API HTTP ${res.status} on ${path}: ${JSON.stringify(json)}`);
+            }
+            return json as any;
+        };
+
+        let cartId: string | undefined;
+        let cleanupError: string | undefined;
+        let outcome: VerifyOutcome | undefined;
+        try {
+            const cartJson = await storeFetch("/store/carts", {
+                method: "POST",
+                body: JSON.stringify({ region_id: storeApi.regionId, customer_id: customerId }),
+            });
+            cartId = cartJson?.cart?.id;
+            if (!cartId) {
+                outcome = { sku, matchesExpected: false, method: "cart", note: `Cart creation failed: ${JSON.stringify(cartJson)}` };
+                return outcome;
+            }
+
+            const lineItemJson = await storeFetch(`/store/carts/${cartId}/line-items`, {
+                method: "POST",
+                body: JSON.stringify({ variant_id: variantId, quantity: 1 }),
+            });
+            const item = lineItemJson?.cart?.items?.find((i: any) => i.variant_id === variantId);
+            if (!item) {
+                outcome = { sku, matchesExpected: false, method: "cart", note: `No line item resolved for variant ${variantId}.` };
+                return outcome;
+            }
+
+            const verifiedPrice = new Decimal(item.unit_price);
+            outcome = { sku, verifiedPrice, matchesExpected: verifiedPrice.equals(expected), method: "cart" };
+            return outcome;
+        } finally {
+            // Ephemeral verification cart, not a real order — clean up, but
+            // record failure rather than swallowing it (a leaked cart is a
+            // minor operational leak, not a correctness issue for this
+            // result, so it must not make verifyPrice itself fail — but it
+            // also must not vanish silently). Must mutate the already-built
+            // outcome object here, since a `finally` block runs after the
+            // `return` expression above is evaluated, not before — a plain
+            // local variable read at return time would miss this.
+            if (cartId) {
+                try {
+                    await storeFetch(`/store/carts/${cartId}`, { method: "DELETE" });
+                } catch (e) {
+                    cleanupError = e instanceof Error ? e.message : String(e);
+                    if (outcome) {
+                        outcome.note = `verification cart ${cartId} cleanup failed, left behind: ${cleanupError}`;
+                    }
+                }
+            }
+        }
     }
 }

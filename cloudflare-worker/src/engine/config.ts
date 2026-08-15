@@ -113,3 +113,11 @@ export const PRODUCT_LIMITS: Record<string, number> = {
         Object.entries(productMaxDiscountOverrides as Record<string, number>).map(([code, pct]) => [code, pct / 100])
     ),
 };
+
+// Celoroční brandová akční cena (např. "DELPHIN": 0.15 = trvale -15 %), zcela
+// oddělené od BRAND_LIMITS výše -- toto NENÍ strop/maxDiscount, jen vstup pro
+// actionPrice syntézu (viz engine/pricing.ts a shoptet-api/pricing-bridge.ts).
+// MIVARDI má úmyslně obě mapy vyplněné se stejnou hodnotou (0.10) -- to jsou
+// dvě nezávislá pravidla, co náhodou souhlasí, ne jedno pravidlo odvozené z
+// druhého. Přidávat/měnit jen přes policy-v1.json, nikdy hardcoded zde.
+export const BRAND_SALE_DISCOUNTS: Record<string, number> = policy.brandSaleDiscounts ?? {};

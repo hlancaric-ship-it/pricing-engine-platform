@@ -144,14 +144,30 @@ describe('generate.ts — real run against the real products.csv, fresh output',
         const product = records.find((r: any) => r.code === '39769');
         expect(product).toBeDefined();
 
-        // Standard: 28,95 | Action: 24,61 | Limit: 25% (floor would be 21,71)
-        // Since a cap (25%) is active AND the product has its own action price,
-        // DiscountLimitPolicy's SALE rule (added after the 2026-08-04 VAGNER
-        // incident) makes the action price authoritative outright for EVERY
-        // tier -- never watered down by a steeper loyalty discount, and never
-        // re-clamped to the cap floor either. 24.61 on all 10 tiers.
-        for (const id of [2, 5, 8, 11, 14, 17, 20, 23, 26, 29]) {
-            expect(product[`pricelist:${id}:price`], `pricelist:${id}:price`).toBe('24,61');
+        // Standard: 28,95 | Action: 24,61 (~15% off) | Limit: 25% (floor 21,71)
+        // DiscountLimitPolicy compares the action price against the cap-clamped
+        // loyalty price and takes whichever is deeper for the customer (fixed
+        // 2026-08-15 -- the action price is never unconditionally authoritative
+        // just because it exists; it still must never be watered down to the cap
+        // floor when it IS the deeper option, per the original 2026-08-04 VAGNER
+        // incident, but a shallower action price must lose to a deeper
+        // cap-limited loyalty tier instead of holding the customer to a worse
+        // price). ZR4-ZR14 (~15% action is deeper than their tier): action wins,
+        // 24.61. ZR16-ZR25 (tier deeper than ~15%, capped at 25%): loyalty wins.
+        const expected: Record<number, string> = {
+            2: '24,61', // ZR4
+            5: '24,61', // ZR6
+            8: '24,61', // ZR8
+            11: '24,61', // ZR10
+            14: '24,61', // ZR12
+            17: '24,61', // ZR14
+            20: '24,32', // ZR16 -- 28.95 * (1-0.16)
+            23: '23,74', // ZR18 -- 28.95 * (1-0.18)
+            26: '23,16', // ZR20 -- 28.95 * (1-0.20)
+            29: '21,71', // ZR25 -- 28.95 * (1-0.25), the cap floor itself
+        };
+        for (const [id, price] of Object.entries(expected)) {
+            expect(product[`pricelist:${id}:price`], `pricelist:${id}:price`).toBe(price);
         }
     });
 });
