@@ -315,6 +315,30 @@ export function createXmlWellFormednessValidator(): TransformStream<Uint8Array, 
     });
 }
 
+// R2 feed bucket cleanup -- every successful runFeedGeneration() uploads a NEW,
+// uniquely-timestamped object (vip-feeds/products_<timestamp>.xml) and never deleted
+// the old ones. Cron runs this multiple times/day, so the bucket grows unbounded
+// forever. Keeps the most recent KEEP_RECENT_COUNT feed objects (a small rolling
+// buffer for manual rollback/inspection) and ALWAYS keeps the currently active feed,
+// even if older than the recent-count window. Best-effort: failure logged, not
+// thrown, never turns a successful generation into a failed one.
+const KEEP_RECENT_COUNT = 10;
+const FEED_PREFIX = 'vip-feeds/';
+
+export async function cleanupOldFeeds(env: Env, activeFilename: string): Promise<{ deleted: string[]; kept: number }> {
+    const listed = await env.FEED_BUCKET.list({ prefix: FEED_PREFIX });
+    const keys = listed.objects.map((o) => o.key).sort();
+
+    const toKeep = new Set(keys.slice(-KEEP_RECENT_COUNT));
+    toKeep.add(activeFilename);
+
+    const toDelete = keys.filter((k) => !toKeep.has(k));
+    if (toDelete.length === 0) return { deleted: [], kept: keys.length };
+
+    await env.FEED_BUCKET.delete(toDelete);
+    return { deleted: toDelete, kept: keys.length - toDelete.length };
+}
+
 export async function runFeedGeneration(env: Env, filename: string, version: string): Promise<void> {
     const startTime = Date.now();
 
@@ -369,6 +393,15 @@ export async function runFeedGeneration(env: Env, filename: string, version: str
         await env.VIP_KV.put('active_feed', JSON.stringify({
             filename, version, generatedAt: new Date().toISOString()
         }));
+
+        try {
+            const cleanup = await cleanupOldFeeds(env, filename);
+            if (cleanup.deleted.length > 0) {
+                console.log(`Feed gen: R2 cleanup removed ${cleanup.deleted.length} old feed(s), kept ${cleanup.kept}.`);
+            }
+        } catch (cleanupErr: any) {
+            console.warn('Feed gen: R2 cleanup failed (non-fatal):', cleanupErr?.message ?? cleanupErr);
+        }
 
         const durationSeconds = Math.round((Date.now() - startTime) / 1000);
         await env.VIP_KV.put('feed_generation_status', JSON.stringify({
