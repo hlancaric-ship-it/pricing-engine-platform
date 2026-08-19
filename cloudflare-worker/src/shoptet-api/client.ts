@@ -207,9 +207,16 @@ export class ShoptetApiClient {
                 return res;
             },
             async (res) => {
+                // BUG (opraveno 2026-08-19): rate-limiter.ts bez passThroughStatuses
+                // hodí throw na jakýkoli non-2xx status mimo retryableStatuses --
+                // parseFn se na 404 vůbec nespustí, takže "if (res.status === 404)
+                // return null" tady bylo mrtvý kód. Smazaný produkt na Shoptetu tak
+                // shodil throw přes celý sync běh, místo aby ho volající (products-reader.ts)
+                // potichu přeskočil. Status se navíc kontroluje NEZÁVISLE na tvaru
+                // `json` (Shoptet nemusí na 404 vracet `errors[]` vůbec).
+                if (res.status === 404) return null; // Může být smazaný
                 const json = await res.json() as any;
                 if (json.errors && json.errors.length > 0) {
-                    if (res.status === 404) return null; // Může být smazaný
                     throw new Error(`API chyba: ${JSON.stringify(json.errors)}`);
                 }
                 // BUG (opraveno 2026-08-13): `json.data.product` NEEXISTUJE -- Shoptet
@@ -220,7 +227,8 @@ export class ShoptetApiClient {
                 // warningu -- celý incremental sync price pipeline přes /products/changes
                 // tak byl fakticky mrtvý, aniž by to kdy něco nahlásilo. Součást INC-010.
                 return json.data;
-            }
+            },
+            { passThroughStatuses: [404] }
         );
     }
 
