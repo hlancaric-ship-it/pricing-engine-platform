@@ -11,7 +11,9 @@
     "sync-coupon-fields": "tsx src/cli/sync-coupon-fields.ts",
     "sync-coupon-fields-live": "tsx src/cli/sync-coupon-fields-live.ts",
     "sync-coupon-fields-diff": "tsx src/cli/sync-coupon-fields-diff.ts",
-    "sync-coupon-fields-diff-live": "tsx src/cli/sync-coupon-fields-diff.ts --live"
+    "sync-coupon-fields-diff-live": "tsx src/cli/sync-coupon-fields-diff.ts --live",
+    "set-header-scripts": "tsx src/cli/set-header-scripts.ts",
+    "set-header-scripts-live": "tsx src/cli/set-header-scripts.ts --live"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20240718.0",

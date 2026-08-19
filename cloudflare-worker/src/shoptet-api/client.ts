@@ -581,4 +581,60 @@ export class ShoptetApiClient {
             }
         );
     }
+
+    /**
+     * Vrátí HTML snippety, co má TENTO addon (podle SECRET_TOKEN) aktuálně vložené
+     * do common-header/common-footer/order-confirmed. Nevidí kód vložený ručně
+     * v adminu ani od jiných addonů -- vlastní izolovaná vrstva.
+     */
+    public async getTemplateIncludes(): Promise<{ location: string; html: string }[]> {
+        const url = `${this.baseUrl}/template-include`;
+        return this.rateLimiter.execute(
+            async () => {
+                GlobalStats.apiRequests.GET++;
+                const res = await fetch(url, { headers: this.getHeaders() });
+                GlobalStats.httpResponses[res.status] = (GlobalStats.httpResponses[res.status] || 0) + 1;
+                return res;
+            },
+            async (res) => {
+                const json = await res.json() as any;
+                if (json.errors && json.errors.length > 0) {
+                    throw new Error(`API chyba při čtení template-include: ${JSON.stringify(json.errors)}`);
+                }
+                return json.data.snippets as { location: string; html: string }[];
+            }
+        );
+    }
+
+    /**
+     * Zapíše/přepíše HTML snippet addonu pro dané umístění (common-header,
+     * common-footer, order-confirmed). Shoptet limit: max 8192 znaků na snippet.
+     */
+    public async setTemplateInclude(location: 'common-header' | 'common-footer' | 'order-confirmed', html: string): Promise<void> {
+        if (html.length > 8192) {
+            throw new Error(`HTML snippet pro '${location}' má ${html.length} znaků, limit Shoptetu je 8192.`);
+        }
+        const url = `${this.baseUrl}/template-include`;
+        const body = { data: { snippets: [{ location, html }] } };
+
+        await this.rateLimiter.execute(
+            async () => {
+                GlobalStats.apiRequests.PATCH++;
+                const res = await fetch(url, {
+                    method: 'POST',
+                    headers: this.getHeaders(),
+                    body: JSON.stringify(body)
+                });
+                GlobalStats.httpResponses[res.status] = (GlobalStats.httpResponses[res.status] || 0) + 1;
+                return res;
+            },
+            async (res) => {
+                const json = await res.json() as any;
+                if (json.errors && json.errors.length > 0) {
+                    throw new Error(`API chyba při zápisu template-include (${location}): ${JSON.stringify(json.errors)}`);
+                }
+                return json;
+            }
+        );
+    }
 }
