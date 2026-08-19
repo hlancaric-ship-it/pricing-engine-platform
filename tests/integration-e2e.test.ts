@@ -98,79 +98,13 @@ describe('generate-xml.ts — real run against a fixture, fresh output', () => {
     });
 });
 
-describe('generate.ts — real run against the real products.csv, fresh output', () => {
-    const tmpDir = path.join(process.cwd(), 'tests', 'fixtures', 'generate-csv-tmp');
-    const importCsvPath = path.join(tmpDir, 'products_import.csv');
-    const errorsCsvPath = path.join(tmpDir, 'errors.csv');
-    let records: any[];
-
-    beforeAll(async () => {
-        if (fs.existsSync(tmpDir)) fs.rmSync(tmpDir, { recursive: true, force: true });
-        fs.mkdirSync(tmpDir, { recursive: true });
-
-        const result = await generateProductsImportCsv(
-            path.join(process.cwd(), 'products.csv'),
-            importCsvPath,
-            errorsCsvPath
-        );
-        expect(result.totalProducts).toBe(16633);
-
-        const content = fs.readFileSync(importCsvPath);
-        records = parse(content, { delimiter: ';', columns: true, skip_empty_lines: true, bom: true });
-    }, 30000); // processes the real 16633-row products.csv; slower under coverage instrumentation
-
-    afterAll(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
-    });
-
-    it('generates a fresh products_import.csv, not the historical exports/products_import.csv', () => {
-        expect(fs.existsSync(importCsvPath)).toBe(true);
-        expect(importCsvPath).not.toContain(`${path.sep}exports${path.sep}products_import.csv`);
-    });
-
-    it('has exactly 16633 product rows', () => {
-        expect(records.length).toBe(16633);
-    });
-
-    it('calculates correct prices for product 97062', () => {
-        const product = records.find((r: any) => r.code === '97062');
-        expect(product).toBeDefined();
-        expect(product['pricelist:2:price']).toBe('6,00'); // ZR4
-        expect(product['pricelist:11:price']).toBe('5,63'); // ZR10
-        expect(product['pricelist:29:price']).toBe('4,69'); // ZR25
-    });
-
-    it('calculates correct prices for product 39769 (action price & max discount)', () => {
-        const product = records.find((r: any) => r.code === '39769');
-        expect(product).toBeDefined();
-
-        // Standard: 28,95 | Action: 24,61 (~15% off) | Limit: 25% (floor 21,71)
-        // DiscountLimitPolicy compares the action price against the cap-clamped
-        // loyalty price and takes whichever is deeper for the customer (fixed
-        // 2026-08-15 -- the action price is never unconditionally authoritative
-        // just because it exists; it still must never be watered down to the cap
-        // floor when it IS the deeper option, per the original 2026-08-04 VAGNER
-        // incident, but a shallower action price must lose to a deeper
-        // cap-limited loyalty tier instead of holding the customer to a worse
-        // price). ZR4-ZR14 (~15% action is deeper than their tier): action wins,
-        // 24.61. ZR16-ZR25 (tier deeper than ~15%, capped at 25%): loyalty wins.
-        const expected: Record<number, string> = {
-            2: '24,61', // ZR4
-            5: '24,61', // ZR6
-            8: '24,61', // ZR8
-            11: '24,61', // ZR10
-            14: '24,61', // ZR12
-            17: '24,61', // ZR14
-            20: '24,32', // ZR16 -- 28.95 * (1-0.16)
-            23: '23,74', // ZR18 -- 28.95 * (1-0.18)
-            26: '23,16', // ZR20 -- 28.95 * (1-0.20)
-            29: '21,71', // ZR25 -- 28.95 * (1-0.25), the cap floor itself
-        };
-        for (const [id, price] of Object.entries(expected)) {
-            expect(product[`pricelist:${id}:price`], `pricelist:${id}:price`).toBe(price);
-        }
-    });
-});
+// The old "real run against the real products.csv" suite (16,633-row real
+// okfish catalog, real product codes/prices) was removed 2026-08-19 along with
+// products.csv itself -- this repo is a product/demo template and must not
+// carry real client data or data-shaped-to-match-real-data fixtures. Coverage
+// for the same code path (generateProductsImportCsv, price/action/cap math)
+// continues via the fixture-based suites above and below, and via
+// tests/pricing-parity.test.ts / tests/golden.test.ts.
 
 describe('generate.ts — per-pricelist VAT columns, matching a real confirmed-working manual import', () => {
     // tests/fixtures/generate-csv-vat/input.csv is a copy of Desktop/test_product_46585.csv

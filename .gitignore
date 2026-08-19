@@ -18,3 +18,15 @@ products_mock_*.csv
 cloudflare-worker/.snapshots/
 coupon-dry-run-report.json
 *.sync_state.json.bak
+
+# Real client data must never live in this repo (product/demo template, not the
+# okfish production repo) -- purged from history 2026-08-19 after being
+# accidentally committed while public. Generic placeholder policy JSON files
+# stay tracked; anything with real customer/product/order data does not.
+customers.csv
+customers.xlsx
+products.csv
+products_import.csv
+okfish-header-extra.css
+tmp_*.json
+audit/

@@ -1,0 +1,22 @@
+{
+    "version": "1.0",
+    "description": "Example pricing policy — replace with your own loyalty tiers and limits. No real client data.",
+    "loyaltyTiers": {
+        "ZR4": 0.04,
+        "ZR6": 0.06,
+        "ZR8": 0.08,
+        "ZR10": 0.10,
+        "ZR12": 0.12,
+        "ZR14": 0.14,
+        "ZR16": 0.16,
+        "ZR18": 0.18,
+        "ZR20": 0.20,
+        "ZR25": 0.25
+    },
+    "brandSaleDiscounts": {},
+    "brandLimits": {
+        "VAGNER": 0.10,
+        "HUMMINBIRD": 0.04
+    },
+    "categoryLimits": {}
+}

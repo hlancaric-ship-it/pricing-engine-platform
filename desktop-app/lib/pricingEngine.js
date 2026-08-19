@@ -33,7 +33,17 @@ function applyPercent(basePrice, pct) {
 // this -- only the underlying tier PRICE must ignore that field and trust only
 // the curated brandLimits/categoryLimits (policy-v1.json), which are the one
 // source of truth for a genuine, intentional per-brand discount ceiling.
-function resolveActiveLimit(row, brandLimits, categoryLimits) {
+// BUG opraveno 2026-08-19: chyběla úroveň Produkt (nejvyšší priorita) --
+// appka počítala jen Brand -> Category, kdežto Worker/CLI engine (jediný
+// zdroj pravdy) má Produkt -> Brand -> Category (viz
+// cloudflare-worker/src/engine/pricing.ts's resolveActiveLimit a
+// src/policies/DiscountLimitPolicy.ts). V praxi appčina XLSX přepočítávací
+// funkce (xlsxProductProcessor.js) žádné limity vůbec nepředávala, takže
+// tahle díra byla zdvojená -- teď opraveno na obou místech najednou.
+function resolveActiveLimit(row, productLimits, brandLimits, categoryLimits) {
+    const code = row.code;
+    if (code && productLimits && productLimits[code] !== undefined) return productLimits[code];
+
     const manufacturer = row.manufacturer;
     if (manufacturer && brandLimits && brandLimits[manufacturer] !== undefined) return brandLimits[manufacturer];
 
@@ -50,7 +60,7 @@ function resolveAllowLoyaltyDiscount(row) {
 
 /**
  * @param {Record<string,string>} row
- * @param {{brandLimits?: Record<string,number>, categoryLimits?: Record<string,number>}} [limits]
+ * @param {{productLimits?: Record<string,number>, brandLimits?: Record<string,number>, categoryLimits?: Record<string,number>, brandSaleDiscounts?: Record<string,number>}} [limits]
  * @returns {Record<string, {price: number, usedActionPrice: boolean}>}
  */
 function calculateAllTierPrices(row, limits) {
@@ -70,8 +80,21 @@ function calculateAllTierPrices(row, limits) {
     // as no action so it can't override the cap-floor rule below. Confirmed
     // live 2026-08-05 (LOWRANCE code 111139).
     if (actionPrice !== undefined && actionPrice >= basePrice) actionPrice = undefined;
+
+    // Celoroční brandová akční cena (policy-v1.json's brandSaleDiscounts) --
+    // 1:1 zrcadlo stejné logiky v cloudflare-worker/src/engine/pricing.ts.
+    // Syntetizuje actionPrice JEN když produkt ještě žádnou vlastní nemá --
+    // existující sale price se nikdy nepřepisuje.
+    if (actionPrice === undefined) {
+        const manufacturer = row.manufacturer;
+        const saleDiscount = manufacturer && limits.brandSaleDiscounts ? limits.brandSaleDiscounts[manufacturer] : undefined;
+        if (saleDiscount !== undefined) {
+            actionPrice = applyPercent(basePrice, saleDiscount * 100);
+        }
+    }
+
     const allowLoyaltyDiscount = resolveAllowLoyaltyDiscount(row);
-    const activeLimit = resolveActiveLimit(row, limits.brandLimits, limits.categoryLimits);
+    const activeLimit = resolveActiveLimit(row, limits.productLimits, limits.brandLimits, limits.categoryLimits);
     const minAllowedPrice = activeLimit !== undefined ? applyPercent(basePrice, activeLimit * 100) : 0;
 
     const result = {};
@@ -83,14 +106,7 @@ function calculateAllTierPrices(row, limits) {
         let bestPrice = basePrice;
         let usedAction = false;
 
-        if (minAllowedPrice > 0 && actionPrice !== undefined) {
-            // A cap is active AND the product has its own sale/action price — that
-            // sale price is authoritative: neither raised by the cap-floor below,
-            // nor overridden by a steeper loyalty-tier discount. Explicit client
-            // requirement — see INCIDENTS.md ("2026-08-04 VAGNER" entry).
-            bestPrice = actionPrice;
-            usedAction = true;
-        } else if (actionPrice !== undefined && loyaltyPrice !== undefined) {
+        if (actionPrice !== undefined && loyaltyPrice !== undefined) {
             if (actionPrice < loyaltyPrice) { bestPrice = actionPrice; usedAction = true; }
             else { bestPrice = loyaltyPrice; }
         } else if (actionPrice !== undefined) {
@@ -100,10 +116,19 @@ function calculateAllTierPrices(row, limits) {
             bestPrice = loyaltyPrice;
         }
 
-        // Enforce the discount limit floor — but NEVER against an active action/sale
-        // price (handled above already; this only fires for loyalty-only prices).
-        if (!usedAction && minAllowedPrice > 0 && bestPrice < minAllowedPrice) {
-            bestPrice = minAllowedPrice;
+        // Cap-clamp whatever bestPrice currently is (action or loyalty) up to what
+        // the cap allows, if it went deeper than the cap permits — never raises a
+        // price that was already shallower than the cap. An active action/sale
+        // price is then compared against that capped value again and wins outright
+        // if it's still deeper, so it's never watered down to the cap floor. This
+        // also correctly lets a genuinely shallow action price lose to a deeper
+        // cap-limited loyalty price instead of always winning by default -- ported
+        // 1:1 from this repo's own cloudflare-worker/src/engine/pricing.ts.
+        if (minAllowedPrice > 0) {
+            const cappedPrice = bestPrice < minAllowedPrice ? minAllowedPrice : bestPrice;
+            const actionWins = actionPrice !== undefined && actionPrice < cappedPrice;
+            bestPrice = actionWins ? actionPrice : cappedPrice;
+            usedAction = actionWins;
         }
 
         result[tier] = { price: round2(bestPrice), usedActionPrice: usedAction };
