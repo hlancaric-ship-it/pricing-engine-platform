@@ -1,7 +1,6 @@
 import { Env, runFeedGeneration } from './feed-generator';
 import { calculateAllTierPrices, CsvRow } from './engine/pricing';
 import { DASHBOARD_HTML } from './dashboard-html';
-import { ORDERS_DASHBOARD_HTML } from './orders-dashboard-html';
 import {
     VIP_PRICES_JS, VIP_DETAIL_JS, VIP_CART_JS, VIP_CATALOG_JS,
     VIP_CART_COUPON_LOCK_JS, VIP_REGISTRATION_HIDE_TYPES_JS
@@ -24,8 +23,6 @@ const STATIC_JS_FILES: Record<string, string> = {
     'vip_registration_hide_types.js': VIP_REGISTRATION_HIDE_TYPES_JS,
 };
 
-const SECRET_TOKEN = 'shoptet-vip-secret-12345';
-
 function jsonResponse(data: unknown, status = 200): Response {
     return new Response(JSON.stringify(data, null, 2), {
         status,
@@ -39,9 +36,9 @@ function jsonResponse(data: unknown, status = 200): Response {
     });
 }
 
-function checkAuth(request: Request): boolean {
+function checkAuth(request: Request, env: Env): boolean {
     const auth = request.headers.get('Authorization') ?? '';
-    return auth === `Bearer ${SECRET_TOKEN}`;
+    return auth === `Bearer ${env.SECRET_TOKEN}`;
 }
 
 // Shoptet signs webhook bodies as hash_hmac('sha1', body, signingKey), sent in the
@@ -142,7 +139,7 @@ export default {
         // The HTTP connection stays open. This is intentional — it allows monitoring via curl.
         // Scheduled cron also uses the same path.
         if (path === '/v1/feed/generate' && request.method === 'POST') {
-            if (!checkAuth(request)) return jsonResponse({ error: 'Unauthorized' }, 401);
+            if (!checkAuth(request, env)) return jsonResponse({ error: 'Unauthorized' }, 401);
 
             const statusData = await env.VIP_KV.get('feed_generation_status');
             if (statusData) {
@@ -173,7 +170,7 @@ export default {
         // watch GitHub Actions logs. Body: free-form JSON snapshot (request counts,
         // HTTP status breakdown, retries, elapsed time).
         if (path === '/v1/sync-stats' && request.method === 'POST') {
-            if (!checkAuth(request)) return jsonResponse({ error: 'Unauthorized' }, 401);
+            if (!checkAuth(request, env)) return jsonResponse({ error: 'Unauthorized' }, 401);
             const body = await request.json().catch(() => null);
             if (!body) return jsonResponse({ error: 'Invalid JSON body' }, 400);
             await env.VIP_KV.put('sync_stats', JSON.stringify({ ...body, updatedAt: new Date().toISOString() }), { expirationTtl: 3600 });
@@ -189,121 +186,11 @@ export default {
             return jsonResponse(JSON.parse(data));
         }
 
-        // === POST /v1/orders-status ===
-        // Nová, ÚPLNĚ IZOLOVANÁ funkce (2026-08-06): skladový semafor +
-        // stav platby otevřených objednávek. Zapisuje compute-orders-stock-status.ts
-        // (samostatný krok v sync.yml, continue-on-error), čte skrytá stránka
-        // /orders-dashboard-xk92q. Nesahá na žádnou existující KV klíč ani logiku.
-        if (path === '/v1/orders-status' && request.method === 'POST') {
-            if (!checkAuth(request)) return jsonResponse({ error: 'Unauthorized' }, 401);
-            const body = await request.json().catch(() => null);
-            if (!body) return jsonResponse({ error: 'Invalid JSON body' }, 400);
-            // TTL byl původně 3600s (1h) -- příliš křehké: jediný vynechaný
-            // sync.yml běh (deploy, git push race, dočasná chyba) nechal KV
-            // klíč vypršet a dashboard spadl na "0 objednávek" i když byla
-            // živá data k dispozici (potvrzeno živě 2026-08-06). 86400s (24h)
-            // dává rozumnou rezervu -- i celý den výpadku automatiky dashboard
-            // neztratí data, jen přestane být čerstvý (a to je vidět v
-            // "aktualizováno" časovém razítku, ne jako prázdný seznam).
-            await env.VIP_KV.put('orders_status', JSON.stringify(body), { expirationTtl: 86400 });
-            return jsonResponse({ ok: true });
-        }
-
-        // === GET /v1/orders-status ===
-        // Sloučí čerstvě přepočítaná data (orders_status, přepisuje se každým
-        // sync.yml během) s ručně označenými "vyriešené" objednávkami
-        // (resolved_orders, samostatný KV klíč -- NIKDY nepřepsán přepočtem,
-        // takže ruční označení přežije i příští automatický refresh).
-        if (path === '/v1/orders-status' && request.method === 'GET') {
-            if (!checkAuth(request)) return jsonResponse({ error: 'Unauthorized' }, 401);
-            const data = await env.VIP_KV.get('orders_status');
-            const resolvedRaw = await env.VIP_KV.get('resolved_orders');
-            const resolved: Record<string, string> = resolvedRaw ? JSON.parse(resolvedRaw) : {};
-            if (!data) return jsonResponse({ orders: [], updatedAt: null });
-            const parsed = JSON.parse(data);
-            if (Array.isArray(parsed.orders)) {
-                parsed.orders = parsed.orders.map((o: any) => ({
-                    ...o,
-                    // Vyriešené buď automaticky (reálny stav v Shoptete -- Vybavená/
-                    // Stornovaná), alebo ručne cez tlačidlo. Automatika má prednosť
-                    // vo význame, ale obe cesty vedú na rovnaký badge/prečiarknutie.
-                    resolved: !!resolved[o.code] || !!o.resolvedByStatus,
-                    resolvedAt: resolved[o.code] || null,
-                }));
-            }
-            return jsonResponse(parsed);
-        }
-
-        // === POST /v1/order-resolved ===
-        // Body: { code, resolved: true|false }. Ukládá se odděleně od
-        // orders_status, aby to nepřepsal příští automatický přepočet.
-        if (path === '/v1/order-resolved' && request.method === 'POST') {
-            const token = url.searchParams.get('token');
-            if (token !== SECRET_TOKEN) return jsonResponse({ error: 'Unauthorized' }, 401);
-            const body = await request.json().catch(() => null) as { code?: string; resolved?: boolean } | null;
-            if (!body?.code) return jsonResponse({ error: 'Usage: { code, resolved }' }, 400);
-            const resolvedRaw = await env.VIP_KV.get('resolved_orders');
-            const resolved: Record<string, string> = resolvedRaw ? JSON.parse(resolvedRaw) : {};
-            if (body.resolved) {
-                resolved[body.code] = new Date().toISOString();
-            } else {
-                delete resolved[body.code];
-            }
-            await env.VIP_KV.put('resolved_orders', JSON.stringify(resolved));
-            return jsonResponse({ ok: true });
-        }
-
-        // === GET /orders-dashboard-xk92q ===
-        // Schválně neobvyklá cesta, nikde neodkazovaná -- skrytá stránka, ne
-        // veřejná funkce webu. Vyžaduje auth přes ?token= query param (prostá
-        // stránka v prohlížeči nemůže poslat Authorization header sama).
-        if (path === '/orders-dashboard-xk92q' && request.method === 'GET') {
-            const token = url.searchParams.get('token');
-            if (token !== SECRET_TOKEN) return new Response('Unauthorized', { status: 401 });
-            return new Response(ORDERS_DASHBOARD_HTML, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
-        }
-
-        // === GET /objednavky-prehlad ===
-        // Čistá adresa bez tokenu v URL -- stránka sama má prihlasovacie okno
-        // (heslo se ověří proti /v1/orders-status a uloží se do cookie), takže
-        // se odkaz dá poslat klientovi bez viditelného hesla v odkazu.
-        if (path === '/objednavky-prehlad' && request.method === 'GET') {
-            return new Response(ORDERS_DASHBOARD_HTML, { headers: { 'Content-Type': 'text/html; charset=utf-8' } });
-        }
-
-        // === POST /v1/order-note ===
-        // Zapíše "Poznámka e-shopu" na konkrétní objednávku. Volané ze skryté
-        // /orders-dashboard-xk92q stránky. NEOTESTOVÁNO naživo -- formát těla
-        // (eshopRemark v data objektu) je odvozený ze stejného vzoru jako zbytek
-        // Shoptet API, ale endpoint PATCH /orders/{code}/notes jsme nikdy
-        // nezavolali, dokud to výslovně nepotvrdí klient na konkrétní objednávce.
-        if (path === '/v1/order-note' && request.method === 'POST') {
-            const token = url.searchParams.get('token');
-            if (token !== SECRET_TOKEN) return jsonResponse({ error: 'Unauthorized' }, 401);
-            if (!env.SHOPTET_PRIVATE_API_TOKEN) return jsonResponse({ error: 'SHOPTET_PRIVATE_API_TOKEN not configured' }, 503);
-
-            const body = await request.json().catch(() => null) as { code?: string; note?: string } | null;
-            if (!body?.code || body.note === undefined) return jsonResponse({ error: 'Usage: { code, note }' }, 400);
-
-            const res = await fetch(`https://api.myshoptet.com/api/orders/${encodeURIComponent(body.code)}/notes`, {
-                method: 'PATCH',
-                headers: {
-                    'Shoptet-Private-API-Token': env.SHOPTET_PRIVATE_API_TOKEN,
-                    'Content-Type': 'application/json',
-                    Accept: 'application/json',
-                },
-                body: JSON.stringify({ data: { eshopRemark: body.note } }),
-            });
-            const resJson = await res.json().catch(() => null);
-            if (!res.ok) return jsonResponse({ error: 'Shoptet API error', status: res.status, detail: resJson }, 502);
-            return jsonResponse({ ok: true });
-        }
-
         // === POST /v1/import/begin ===
         // Starts a new customer-discount import version. Blue/Green: nothing live is
         // touched until /finish flips 'active_customer_version'.
         if (path === '/v1/import/begin' && request.method === 'POST') {
-            if (!checkAuth(request)) return jsonResponse({ error: 'Unauthorized' }, 401);
+            if (!checkAuth(request, env)) return jsonResponse({ error: 'Unauthorized' }, 401);
             const version = `v${Date.now()}`;
             return jsonResponse({ version });
         }
@@ -312,7 +199,7 @@ export default {
         // Body: { version, customers: [{ hash, discount }] }. Each customer is stored
         // under a version-scoped key so an in-progress import never affects live reads.
         if (path === '/v1/import/chunk' && request.method === 'POST') {
-            if (!checkAuth(request)) return jsonResponse({ error: 'Unauthorized' }, 401);
+            if (!checkAuth(request, env)) return jsonResponse({ error: 'Unauthorized' }, 401);
             const body = await request.json() as { version: string; customers: Array<{ hash: string; discount: number }> };
             if (!body?.version || !Array.isArray(body.customers)) {
                 return jsonResponse({ error: 'Invalid payload' }, 400);
@@ -325,7 +212,7 @@ export default {
 
         // === GET /v1/import/active ===
         if (path === '/v1/import/active' && request.method === 'GET') {
-            if (!checkAuth(request)) return jsonResponse({ error: 'Unauthorized' }, 401);
+            if (!checkAuth(request, env)) return jsonResponse({ error: 'Unauthorized' }, 401);
             const version = await env.VIP_KV.get('active_customer_version');
             return jsonResponse({ version });
         }
@@ -334,7 +221,7 @@ export default {
         // Flips 'active_customer_version' to the new version — the atomic cutover.
         // Returns the previous active version so the caller can clean it up.
         if (path === '/v1/import/finish' && request.method === 'POST') {
-            if (!checkAuth(request)) return jsonResponse({ error: 'Unauthorized' }, 401);
+            if (!checkAuth(request, env)) return jsonResponse({ error: 'Unauthorized' }, 401);
             const body = await request.json() as { version: string; customers: number };
             if (!body?.version) return jsonResponse({ error: 'Invalid payload' }, 400);
             const oldVersion = await env.VIP_KV.get('active_customer_version');
@@ -345,7 +232,7 @@ export default {
         // === POST /v1/import/cleanup ===
         // Deletes all customer:<version>:* keys for a retired (no longer active) version.
         if (path === '/v1/import/cleanup' && request.method === 'POST') {
-            if (!checkAuth(request)) return jsonResponse({ error: 'Unauthorized' }, 401);
+            if (!checkAuth(request, env)) return jsonResponse({ error: 'Unauthorized' }, 401);
             const body = await request.json() as { version: string };
             if (!body?.version) return jsonResponse({ error: 'Invalid payload' }, 400);
             let cursor: string | undefined;
@@ -417,7 +304,7 @@ export default {
 
         // === POST /v1/products/import/begin ===
         if (path === '/v1/products/import/begin' && request.method === 'POST') {
-            if (!checkAuth(request)) return jsonResponse({ error: 'Unauthorized' }, 401);
+            if (!checkAuth(request, env)) return jsonResponse({ error: 'Unauthorized' }, 401);
             const version = `v${Date.now()}`;
             return jsonResponse({ version });
         }
@@ -429,7 +316,7 @@ export default {
         // SAME engine already used for the xlsx pricelist recalculation, so the cart badge
         // and the pricelist price can never disagree.
         if (path === '/v1/products/import/chunk' && request.method === 'POST') {
-            if (!checkAuth(request)) return jsonResponse({ error: 'Unauthorized' }, 401);
+            if (!checkAuth(request, env)) return jsonResponse({ error: 'Unauthorized' }, 401);
             const body = await request.json() as { version: string; products: Array<{ code: string; row: CsvRow }> };
             if (!body?.version || !Array.isArray(body.products)) {
                 return jsonResponse({ error: 'Invalid payload' }, 400);
@@ -456,7 +343,7 @@ export default {
 
         // === POST /v1/products/import/finish ===
         if (path === '/v1/products/import/finish' && request.method === 'POST') {
-            if (!checkAuth(request)) return jsonResponse({ error: 'Unauthorized' }, 401);
+            if (!checkAuth(request, env)) return jsonResponse({ error: 'Unauthorized' }, 401);
             const body = await request.json() as { version: string };
             if (!body?.version) return jsonResponse({ error: 'Invalid payload' }, 400);
             const oldVersion = await env.VIP_KV.get('active_product_version');
@@ -477,7 +364,7 @@ export default {
         // řešit diff po jednotlivých produktech přes GET-před-PUT jako u KV
         // produktové cache.
         if (path.startsWith('/v1/price-cache/') && request.method === 'GET') {
-            if (!checkAuth(request)) return jsonResponse({ error: 'Unauthorized' }, 401);
+            if (!checkAuth(request, env)) return jsonResponse({ error: 'Unauthorized' }, 401);
             const pricelistId = path.substring('/v1/price-cache/'.length);
             if (!pricelistId) return jsonResponse({ error: 'Chybí pricelistId' }, 400);
             const raw = await env.VIP_KV.get(`pricecache:${pricelistId}`);
@@ -490,7 +377,7 @@ export default {
         // KV klíče. Volající (RemotePriceCache) sem posílá jen produkty, u kterých
         // se cena reálně změnila oproti tomu, co GET výše vrátil.
         if (path.startsWith('/v1/price-cache/') && request.method === 'POST') {
-            if (!checkAuth(request)) return jsonResponse({ error: 'Unauthorized' }, 401);
+            if (!checkAuth(request, env)) return jsonResponse({ error: 'Unauthorized' }, 401);
             const pricelistId = path.substring('/v1/price-cache/'.length);
             if (!pricelistId) return jsonResponse({ error: 'Chybí pricelistId' }, 400);
             const body = await request.json() as { updates: Record<string, string> };

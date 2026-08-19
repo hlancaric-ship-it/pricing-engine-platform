@@ -16,6 +16,13 @@ r2_buckets = [
 # Set your own feed URL (or a test fixture) before ever running `wrangler deploy`.
 MASTER_FEED_URL = "https://example.com/replace-with-your-own-feed-url.csv"
 
+# SECRET_TOKEN (admin/write-endpoint auth) is NOT set here -- secrets never go in
+# wrangler.toml/[vars] in plaintext, and each client deployment MUST get its own
+# unique value (never reuse the same token across clients). Set it with:
+#   npx wrangler secret put SECRET_TOKEN
+# Do this BEFORE the first deploy for every new client -- the Worker will throw on
+# any admin/write request (checkAuth) until it's set.
+
 [triggers]
 crons = ["12 6,10,14,18,22 * * *"]
 

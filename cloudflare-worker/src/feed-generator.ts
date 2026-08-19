@@ -10,6 +10,12 @@ export interface Env {
     SHOPTET_WEBHOOK_SIGNING_KEY?: string;
     GITHUB_DISPATCH_TOKEN?: string;
     SHOPTET_PRIVATE_API_TOKEN?: string;
+    // Admin/write-endpoint auth token -- MUST be set per-deployment via
+    // `wrangler secret put SECRET_TOKEN`, never hardcoded in source. This is a
+    // multi-client product template: a hardcoded literal here would mean every
+    // client's Worker deployment shares the exact same admin token (found and
+    // fixed 2026-08-19 -- see index.ts's checkAuth()).
+    SECRET_TOKEN: string;
 }
 
 // Minimal XML escape — only chars that MUST be escaped (safe for both text content and
