@@ -2,6 +2,13 @@ name = "pricing-engine-platform-worker"
 main = "src/index.ts"
 compatibility_date = "2024-07-20"
 
+# Standard production minification (esbuild, via wrangler's built-in bundler) --
+# whitespace/identifier compaction and dead-code elimination for smaller,
+# faster-to-parse Worker bundles. This is normal production practice, not
+# obfuscation: readable source stays in git history, only the deployed
+# bundle is compacted.
+minify = true
+
 kv_namespaces = [
   { binding = "VIP_KV", id = "REPLACE_WITH_YOUR_OWN_KV_NAMESPACE_ID" }
 ]
