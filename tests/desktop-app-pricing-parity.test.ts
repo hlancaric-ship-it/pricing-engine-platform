@@ -23,7 +23,7 @@ const { TIER_NAMES } = await import('../cloudflare-worker/src/engine/config.js')
 // desktop-app/lib/pricingEngine.js is CommonJS -- Vitest's ESM/CJS interop handles the
 // require transparently, same technique already used elsewhere in this repo for
 // cross-engine comparisons (tests/cli-vs-worker-identical-output.test.ts).
-// eslint-disable-next-line @typescript-eslint/no-var-requires
+// eslint-disable-next-line @typescript-eslint/no-require-imports
 const desktopEngine = require('../desktop-app/lib/pricingEngine.js');
 
 // Proves desktop-app/lib/pricingEngine.js (the manual 1:1 port used by
