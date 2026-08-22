@@ -26,14 +26,37 @@ okfish incident logu (INC-006/010/011), bez kopírování okfish kódu:
 napříč oběma balíčky — root 326/326, `cloudflare-worker/` 97/97. Git strom
 čistý, nic necommitnutého.
 
-## Priorita — klientský analyzer (2026-08-22, ještě nezapočato)
+## Klientský analyzer — HOTOVO (2026-08-22)
 
-Cíl: klient nahraje jen export zákazníků + produktů/ceníku do
-`clients/<klient>/02-exporty/`, skript z toho navrhne (NE rovnou nasadí)
-draft `policy-v1.json` pro daného klienta.
+`scripts/analyze-client-exports.ts` -- funguje přesně podle plánu níže.
+Použití: `npx tsx scripts/analyze-client-exports.ts --client <jméno>` (čte
+`clients/<jméno>/02-exporty/{zakaznici,produkty}/*.csv`, najde první CSV v
+každé složce) nebo `--customers <path> --products <path> --out <dir>`
+přímo. Vlastní loosely-typed CSV parser (auto-detekce delimiteru
+`;`/`,`/tab), heuristika na název sloupce (skupina/tier/pricelist/atd.) s
+fallbackem na "malá množina distinct krátkých hodnot, ne skoro-unikátní".
 
-Plán:
-- `scripts/analyze-client-exports.ts` — nový skript, ne úprava existujícího.
+**Otestováno proti syntetickým datům** (ne reálným klientským, viz
+`clients/README.md`) -- sloupcová detekce, fallback heuristika i
+brandLimits "konzistentní vzor" logika (≥50 % pokrytí značky, odchylka
+≤3 p.b., ≥3 produkty) fungují podle očekávání. `tsc --noEmit` i `eslint`
+čisté, celá test suite (651/651, mimo 1 pre-existující selhání souvisejícího
+s chybějícím zkompilovaným wasm fixture pro discount-lock -- nesouvisí s
+tímhle skriptem, stejné na `main` i tady) prochází beze změny.
+
+**Vědomě nedodělané / rohové případy pro příště:**
+- % slevy per tier **nejde odvodit** ze zákaznického exportu (neobsahuje
+  ceny) -- draft JSON nechává `loyaltyTiers_DRAFT_percentChybi` jako
+  `null` per skupina, člověk musí doplnit ručně.
+- XLSX se nečte přímo (v repu není xlsx knihovna) -- obsluha/klient musí
+  export uložit jako CSV, stejná konvence jako jinde (např. dodavatelské
+  ceníky v brani-cistytriko).
+- Fallback heuristika na tier sloupec (bez shody v názvu) je čistě
+  statistická -- na exportu s divnou strukturou může minout nebo najít
+  špatný sloupec; vždycky se to promítne do reportu, kde jde ověřit, jestli
+  detekovaný sloupec dává smysl.
+
+Původní plán (pro referenci):
 - Zákaznický export → najít sloupec skupina/tier/pricelist (heuristika na
   název sloupce + na to, že hodnoty vypadají jako malá množina opakujících
   se řetězců), spočítat distinct hodnoty + počty → návrh `loyaltyTiers`.
