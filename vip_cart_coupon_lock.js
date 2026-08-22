@@ -1,13 +1,22 @@
 (() => {
     "use strict";
 
-    console.log("%cVIP CART COUPON LOCK (SK) — blokuje kupón pri ZR20/ZR25", "background:#28a745;color:white;padding:4px 8px;font-weight:bold;font-size:12px;border-radius:3px;");
+    // Per-client config -- set window.VIP_COUPON_LOCK_CONFIG BEFORE this script
+    // tag in the storefront's header snippet. Defaults below are deliberately
+    // generic (no client branding/logo, no hardcoded locale) -- this file is a
+    // shared template across clients, not tied to any one deployment.
+    const CONFIG = Object.assign(
+        {
+            // Tiers that already sit at the maximum available loyalty discount —
+            // stacking a cart coupon on top of them is not allowed by policy.
+            lockedTiers: ["ZR20", "ZR25"],
+            message: "You already have the maximum available discount, so a coupon code cannot be applied on top of it.",
+            logoUrl: null // optional -- set a client's own logo URL via config, no default
+        },
+        window.VIP_COUPON_LOCK_CONFIG || {}
+    );
 
-    // Tiers that already sit at the maximum available loyalty discount —
-    // stacking a cart coupon on top of them is not allowed by policy.
-    const LOCKED_TIERS = ["ZR20", "ZR25"];
-    const MESSAGE = "Dosiahli ste maximálnu možnú zľavu, kupón preto pre vás nie je dostupný.";
-    const FISH_LOGO_URL = "https://cdn.myshoptet.com/usr/www.okfish.sk/user/logos/logo-fish.png";
+    console.log("%cVIP CART COUPON LOCK — blocks coupon at " + CONFIG.lockedTiers.join("/"), "background:#28a745;color:white;padding:4px 8px;font-weight:bold;font-size:12px;border-radius:3px;");
 
     function getTier() {
         const email = (window.shoptet?.customer?.email || "").trim().toLowerCase();
@@ -96,23 +105,29 @@
             msgText.style.lineHeight = "1.35";
             msgText.style.textShadow = "0 1px 2px rgba(0,0,0,0.35)";
             msgText.style.textTransform = "uppercase";
-            msgText.textContent = MESSAGE;
+            msgText.textContent = CONFIG.message;
             overlay.appendChild(msgText);
 
-            const fishLogo = document.createElement("img");
-            fishLogo.src = FISH_LOGO_URL;
-            fishLogo.alt = "";
-            fishLogo.style.position = "absolute";
-            fishLogo.style.right = "14px";
-            fishLogo.style.bottom = "12px";
-            fishLogo.style.width = "132px";
-            fishLogo.style.height = "132px";
-            fishLogo.style.objectFit = "contain";
-            fishLogo.style.opacity = "0.95";
-            fishLogo.style.filter = "drop-shadow(0 1px 3px rgba(0,0,0,0.35))";
-            fishLogo.onerror = () => fishLogo.remove(); // logo failed to load — skip silently
+            // Optional per-client logo -- only rendered if a client has set one
+            // via window.VIP_COUPON_LOCK_CONFIG.logoUrl. No default image, so a
+            // fresh deployment with no config shows the message alone, not
+            // another client's branding.
+            if (CONFIG.logoUrl) {
+                const clientLogo = document.createElement("img");
+                clientLogo.src = CONFIG.logoUrl;
+                clientLogo.alt = "";
+                clientLogo.style.position = "absolute";
+                clientLogo.style.right = "14px";
+                clientLogo.style.bottom = "12px";
+                clientLogo.style.width = "132px";
+                clientLogo.style.height = "132px";
+                clientLogo.style.objectFit = "contain";
+                clientLogo.style.opacity = "0.95";
+                clientLogo.style.filter = "drop-shadow(0 1px 3px rgba(0,0,0,0.35))";
+                clientLogo.onerror = () => clientLogo.remove(); // logo failed to load — skip silently
+                overlay.appendChild(clientLogo);
+            }
 
-            overlay.appendChild(fishLogo);
             target.appendChild(overlay);
         }
 
@@ -145,7 +160,7 @@
 
     function run() {
         const tier = getTier();
-        if (tier && LOCKED_TIERS.includes(tier)) {
+        if (tier && CONFIG.lockedTiers.includes(tier)) {
             lockCoupon();
         } else {
             unlockCoupon();
