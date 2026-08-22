@@ -26,6 +26,30 @@ okfish incident logu (INC-006/010/011), bez kopírování okfish kódu:
 napříč oběma balíčky — root 326/326, `cloudflare-worker/` 97/97. Git strom
 čistý, nic necommitnutého.
 
+## Priorita — klientský analyzer (2026-08-22, ještě nezapočato)
+
+Cíl: klient nahraje jen export zákazníků + produktů/ceníku do
+`clients/<klient>/02-exporty/`, skript z toho navrhne (NE rovnou nasadí)
+draft `policy-v1.json` pro daného klienta.
+
+Plán:
+- `scripts/analyze-client-exports.ts` — nový skript, ne úprava existujícího.
+- Zákaznický export → najít sloupec skupina/tier/pricelist (heuristika na
+  název sloupce + na to, že hodnoty vypadají jako malá množina opakujících
+  se řetězců), spočítat distinct hodnoty + počty → návrh `loyaltyTiers`.
+- Produktový export → najít sloupec značka/manufacturer + cena/sleva →
+  spočítat průměrnou/nejčastější slevu per značka → návrh `brandLimits`
+  kandidátů (jen značky s konzistentním vzorem slevy napříč produkty, ne
+  šum).
+- Výstup: markdown report (co našel, s čísly) + draft JSON do
+  `clients/<klient>/03-analyza/`, výslovně označený "NÁVRH — zkontroluj
+  před nasazením", nikdy auto-aplikovaný do `src/config/policies/`.
+- `src/csv/reader.ts` je pro `PricingInput` (produktový feed formát), ne
+  pro syrové klientské exporty — ty mají jiné/neznámé sloupce dopředu,
+  potřebuje se vlastní loosely-typed parser s heuristikou na názvy sloupců.
+- Testovat proti `_template/` s libovolnými syntetickými/mock daty (ne
+  reálnými klientskými daty, ta se necommitují — viz `clients/README.md`).
+
 ## Otevřené body
 
 1. **Sjednocené `EcommercePlatformAdapter` rozhraní** existuje
