@@ -30,3 +30,9 @@ products_import.csv
 okfish-header-extra.css
 tmp_*.json
 audit/
+
+# Klientská data z onboardingu -- NIKDY necommitovat (viz clients/README.md)
+clients/*/01-pozadavky/*
+clients/*/02-exporty/**
+!clients/_template/**/.gitkeep
+!clients/README.md
