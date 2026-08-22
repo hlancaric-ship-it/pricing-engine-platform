@@ -21,6 +21,10 @@ jobs:
     - run: npm test
     - run: npx eslint src tests
     - name: Run E2E Benchmark
+      # products.csv is gitignored (local/real data goes here in normal dev
+      # use) -- CI has no such file, so seed it from the committed synthetic
+      # fixture (no real client/product data) before generating mock rows.
       run: |
+        cp ci-fixtures/products.sample.csv products.csv
         npm run mock:data -- 100000
         npm run benchmark -- 100000
